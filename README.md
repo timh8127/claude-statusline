@@ -3,7 +3,7 @@
 A colored status line for [Claude Code](https://claude.com/claude-code):
 
 ```
-◆ Opus 5.5 ●●●○○ high │ ctx ▰▰▱▱▱▱▱▱ 23% 230k/1M │ cache ▰▰▰▱ 4m05s 94% hit │ 5h ▰▰▰▱▱▱ 42% ↻ 2h13m │ 7d ▰▰▰▰▰▱ 81%
+◆ Opus 5.5 ●●●○○ high │ ctx ▰▰▱▱▱▱▱▱ 23% 230k/1M │ cache ▰▰▰▱ 4m05s │ 5h ▰▰▰▱▱▱ 42% ↻ 2h13m │ 7d ▰▰▰▰▰▱ 81%
 ```
 
 | Segment | Shows |
@@ -11,12 +11,20 @@ A colored status line for [Claude Code](https://claude.com/claude-code):
 | `◆ Opus 5.5` | Current model |
 | `●●●○○ high` | Effort level (low → medium → high → xhigh → max) |
 | `ctx` | Context window used: bar, percent, tokens / window size |
-| `cache` | Prompt cache warmth: time left before it goes cold (bar drains, green → red), hit ratio. When cold: `❄ cold ↺ 128k` = tokens the next message must re-write |
+| `cache` | Prompt cache warmth: time left before it goes cold (bar drains, green → red). When cold: `❄ cold ↺ 128k` = tokens the next message must re-write |
 | `5h` | 5-hour usage limit, plus time until it resets (`↻`) |
 | `7d` | Weekly usage limit |
 
 Bars go green → yellow (50%) → orange (75%) → red (90%). The `5h`/`7d` segments appear once
 Claude Code reports rate limits (subscription plans, after the first response).
+
+On narrow terminals the line shrinks to fit (`COLUMNS`, which Claude Code sets), dropping detail in
+this order: token counts → effort word → shorter bars → no bars → `7d` → cold-cache `↺` count →
+`5h` reset time → effort dots. At 80 columns:
+
+```
+◆ Opus 5.5 ●●●○○ │ ctx 23% │ cache 4m05s │ 5h 42% ↻ 2h13m │ 7d 81%
+```
 
 ## Install
 
@@ -44,6 +52,8 @@ The installer copies `statusline-command.js` into `~/.claude/` (or `$CLAUDE_CONF
   main conversation, not subagents. The installer sets `refreshInterval: 5` so the countdown
   ticks while you're idle; without it the line only redraws on new messages. Set your own
   `refreshInterval` in `settings.json` and re-running the installer keeps it.
+- **Width:** set `CLAUDE_STATUSLINE_WIDTH` to force a width (e.g. if Claude Code's notifications
+  share the row and cut off the end).
 - **Debugging:** set `CLAUDE_STATUSLINE_DEBUG=1` to write each raw payload to
   `~/.claude/statusline-last.json`.
 - **Test by hand:** `echo '{}' | node ~/.claude/statusline-command.js`

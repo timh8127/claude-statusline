@@ -2,7 +2,10 @@
 "use strict";
 
 // Claude Code status line:
-//   ◆ Opus 5.5 ●●●○○ high │ ctx ▰▰▱▱▱▱▱▱ 23% 230k/1M │ cache ▰▰▰▱ 4m05s 94% hit │ 5h ▰▰▰▱▱▱ 42% ↻ 2h13m │ 7d ▰▱▱▱▱▱ 18%
+//   ◆ Opus 5.5 ●●●○○ high │ ctx ▰▰▱▱▱▱▱▱ 23% 230k/1M │ cache ▰▰▰▱ 4m05s │ 5h ▰▰▰▱▱▱ 42% ↻ 2h13m │ 7d ▰▱▱▱▱▱ 18%
+//
+// Shrinks to fit the terminal width (COLUMNS, which Claude Code sets), dropping
+// the least useful detail first. See SHRINK_STEPS.
 
 const fs = require("fs");
 const os = require("os");
@@ -82,6 +85,9 @@ function fmtDuration(ms) {
   return `${m}m`;
 }
 
+// Join non-empty pieces with a space.
+const join = (...xs) => xs.filter(Boolean).join(" ");
+
 // ---------- model ----------
 const modelId = (data.model && data.model.id) || "";
 // "(1M context)" is redundant with the ctx segment.
@@ -112,17 +118,23 @@ function readEffort() {
 }
 
 const EFFORT_STEPS = ["low", "medium", "high", "xhigh", "max"];
-function fmtEffort(level) {
-  if (!level) return null;
-  const lv = String(level).toLowerCase();
+const effortLevel = readEffort();
+
+function effortSegment(o) {
+  if (!effortLevel || !o.effort) return null;
+  const lv = String(effortLevel).toLowerCase();
   const idx = EFFORT_STEPS.indexOf(lv);
   if (idx < 0) return c.label(lv);
   const dots = c.claude("●".repeat(idx + 1)) + c.dim("○".repeat(EFFORT_STEPS.length - idx - 1));
-  return `${dots} ${c.label(lv)}`;
+  return join(dots, o.effortLabel && c.label(lv));
+}
+
+function headSegment(o) {
+  return join(c.claude("◆ ") + bold(c.text(modelName)), effortSegment(o));
 }
 
 // ---------- context window ----------
-function contextSegment() {
+function contextSegment(o) {
   const cw = data.context_window || {};
   const size = cw.context_window_size || (/\[1m\]/i.test(modelId) ? 1e6 : 2e5);
   let pct = typeof cw.used_percentage === "number" ? cw.used_percentage : null;
@@ -135,21 +147,14 @@ function contextSegment() {
   }
   if (pct == null && used != null) pct = (used / size) * 100;
   if (used == null && pct != null) used = Math.round((pct / 100) * size);
-  if (pct == null) return `${c.label("ctx")} ${bar(0, 8)} ${c.dim(`—/${fmtTokens(size)}`)}`;
 
-  return `${c.label("ctx")} ${bar(pct, 8)} ${fmtPct(pct)} ${c.dim(`${fmtTokens(used)}/${fmtTokens(size)}`)}`;
+  const label = c.label("ctx");
+  if (pct == null) {
+    return join(label, o.bars && bar(0, o.shortBars ? 4 : 8), c.dim(o.tokens ? `—/${fmtTokens(size)}` : "—"));
+  }
+  return join(label, o.bars && bar(pct, o.shortBars ? 4 : 8), fmtPct(pct),
+    o.tokens && c.dim(`${fmtTokens(used)}/${fmtTokens(size)}`));
 }
-
-// ---------- rate limits ----------
-function limitSegment(label, lim, showReset) {
-  if (!lim || typeof lim.used_percentage !== "number") return null;
-  let s = `${c.label(label)} ${bar(lim.used_percentage, 6)} ${fmtPct(lim.used_percentage)}`;
-  const resetMs = toMs(lim.resets_at);
-  if (showReset && resetMs) s += ` ${c.cyan(`↻ ${fmtDuration(resetMs - Date.now())}`)}`;
-  return s;
-}
-
-const rl = data.rate_limits || {};
 
 // ---------- prompt cache ----------
 // Uses the `prompt_cache` object Claude Code (v2.1.251+) passes in. The bar drains
@@ -164,7 +169,7 @@ function fmtClock(ms) {
   return `${s}s`;
 }
 
-function cacheSegment() {
+function cacheSegment(o) {
   const pc = data.prompt_cache;
   if (!pc || typeof pc !== "object" || !pc.caching_observed) return null;
 
@@ -174,38 +179,82 @@ function cacheSegment() {
   const left = expMs != null ? expMs - Date.now() : null;
   const warm = left != null ? left > 0 : !!pc.warm;
 
-  const hit = typeof pc.hit_ratio === "number" && pc.requests > 1
-    ? c.dim(` ${Math.round(pc.hit_ratio * 100)}% hit`)
-    : "";
-
   if (!warm) {
-    const rebuild = pc.recache_tokens_if_cold > 0
-      ? c.dim(` ↺ ${fmtTokens(pc.recache_tokens_if_cold)}`)
-      : "";
-    return `${label} ${c.cyan("❄ cold")}${rebuild}${hit}`;
+    const rebuild = o.rebuild && pc.recache_tokens_if_cold > 0 &&
+      c.dim(`↺ ${fmtTokens(pc.recache_tokens_if_cold)}`);
+    return join(label, c.cyan("❄ cold"), rebuild);
   }
 
-  if (left == null) return `${label} ${c.green("● warm")}${hit}`;
+  if (left == null) return join(label, c.green("● warm"));
 
   // Bar shows time remaining; colour goes green → red as the TTL drains.
   const drained = Math.min(100, Math.max(0, 100 - (left / ttlMs) * 100));
   const col = levelColor(drained);
-  const filled = Math.max(1, Math.round(((100 - drained) / 100) * 4));
-  const gauge = col("▰".repeat(filled)) + c.dim("▱".repeat(4 - filled));
-  return `${label} ${gauge} ${col(bold(fmtClock(left)))}${hit}`;
+  const w = o.shortBars ? 2 : 4;
+  const filled = Math.max(1, Math.round(((100 - drained) / 100) * w));
+  const gauge = o.bars && col("▰".repeat(filled)) + c.dim("▱".repeat(w - filled));
+  return join(label, gauge, col(bold(fmtClock(left))));
 }
 
-// ---------- assemble ----------
-const head = [c.claude("◆ ") + bold(c.text(modelName)), fmtEffort(readEffort())]
-  .filter(Boolean)
-  .join(" ");
+// ---------- rate limits ----------
+const rl = data.rate_limits || {};
 
-const parts = [
-  head,
-  contextSegment(),
-  cacheSegment(),
-  limitSegment("5h", rl.five_hour, true),
-  limitSegment("7d", rl.seven_day, false),
-].filter(Boolean);
+function limitSegment(label, lim, showReset, o) {
+  if (!lim || typeof lim.used_percentage !== "number") return null;
+  const resetMs = toMs(lim.resets_at);
+  const reset = showReset && o.reset && resetMs &&
+    c.cyan(`↻ ${fmtDuration(resetMs - Date.now())}`);
+  return join(c.label(label), o.bars && bar(lim.used_percentage, o.shortBars ? 3 : 6),
+    fmtPct(lim.used_percentage), reset);
+}
 
-process.stdout.write(parts.join(SEP));
+// ---------- fit to width ----------
+// Each step is applied on top of the previous ones until the line fits.
+const SHRINK_STEPS = [
+  {},                   // everything
+  { tokens: false },    // ctx: drop "230k/1M", keep the percentage
+  { effortLabel: false }, // effort: dots only
+  { shortBars: true },  // halve every bar
+  { bars: false },      // no bars: percentages/countdown carry the colour
+  { sevenDay: false },  // weekly limit
+  { rebuild: false },   // cold cache: drop "↺ 228k"
+  { reset: false },     // 5h: drop "↻ 2h13m"
+  { effort: false },    // effort dots
+];
+const FULL = {
+  tokens: true, effortLabel: true, bars: true, shortBars: false, sevenDay: true,
+  rebuild: true, reset: true, effort: true,
+};
+
+function render(o) {
+  return [
+    headSegment(o),
+    contextSegment(o),
+    cacheSegment(o),
+    limitSegment("5h", rl.five_hour, true, o),
+    o.sevenDay && limitSegment("7d", rl.seven_day, false, o),
+  ].filter(Boolean).join(SEP);
+}
+
+// Visible width: strip colour codes, count code points (all glyphs used are 1 column).
+const visibleWidth = (s) => Array.from(s.replace(/\x1b\[[0-9;]*m/g, "")).length;
+
+// CLAUDE_STATUSLINE_WIDTH overrides; otherwise COLUMNS minus a little slack for
+// Claude Code's own padding. Unknown width → never shrink.
+function budget() {
+  const override = parseInt(process.env.CLAUDE_STATUSLINE_WIDTH, 10);
+  if (override > 0) return override;
+  const cols = parseInt(process.env.COLUMNS, 10);
+  return cols > 0 ? cols - 2 : Infinity;
+}
+
+const max = budget();
+let opts = { ...FULL };
+let line = render(opts);
+for (const step of SHRINK_STEPS.slice(1)) {
+  if (visibleWidth(line) <= max) break;
+  opts = { ...opts, ...step };
+  line = render(opts);
+}
+
+process.stdout.write(line);
