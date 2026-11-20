@@ -35,7 +35,13 @@ if (fs.existsSync(SETTINGS)) {
 // Forward slashes + quotes: Claude Code runs this through Git Bash on Windows,
 // where backslashes are eaten as escape characters.
 const command = `node "${DEST.replace(/\\/g, "/")}"`;
-const statusLine = { type: "command", command };
+// Re-run every few seconds so the prompt-cache countdown keeps ticking while
+// idle (otherwise it only redraws on messages). A value the user set is kept.
+const prev = settings.statusLine || {};
+const refreshInterval = Number.isInteger(prev.refreshInterval) && prev.refreshInterval >= 1
+  ? prev.refreshInterval
+  : 5;
+const statusLine = { type: "command", command, refreshInterval };
 
 if (JSON.stringify(settings.statusLine) === JSON.stringify(statusLine)) {
   console.log(`Settings        -> already configured (${SETTINGS})`);

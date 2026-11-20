@@ -2,7 +2,7 @@
 "use strict";
 
 // Claude Code status line:
-//   ◆ Opus 5.5 ●●●○○ high │ ctx ▰▰▱▱▱▱▱▱ 23% 230k/1M │ 5h ▰▰▰▱▱▱ 42% ↻ 2h13m │ 7d ▰▱▱▱▱▱ 18%
+//   ◆ Opus 5.5 ●●●○○ high │ ctx ▰▰▱▱▱▱▱▱ 23% 230k/1M │ cache ▰▰▰▱ 4m05s 94% hit │ 5h ▰▰▰▱▱▱ 42% ↻ 2h13m │ 7d ▰▱▱▱▱▱ 18%
 
 const fs = require("fs");
 const os = require("os");
@@ -151,6 +151,50 @@ function limitSegment(label, lim, showReset) {
 
 const rl = data.rate_limits || {};
 
+// ---------- prompt cache ----------
+// Uses the `prompt_cache` object Claude Code (v2.1.251+) passes in. The bar drains
+// as the cached prefix approaches its TTL; once cold, shows how many tokens the
+// next message will have to re-write. Warmth is recomputed from `expires_at`
+// on every run, so the countdown stays honest between messages (see
+// `refreshInterval` in install.js).
+function fmtClock(ms) {
+  const s = Math.max(0, Math.ceil(ms / 1000));
+  if (s >= 600) return `${Math.ceil(s / 60)}m`;
+  if (s >= 60) return `${Math.floor(s / 60)}m${String(s % 60).padStart(2, "0")}s`;
+  return `${s}s`;
+}
+
+function cacheSegment() {
+  const pc = data.prompt_cache;
+  if (!pc || typeof pc !== "object" || !pc.caching_observed) return null;
+
+  const label = c.label("cache");
+  const ttlMs = pc.ttl === "1h" ? 3600e3 : 300e3;
+  const expMs = toMs(pc.expires_at);
+  const left = expMs != null ? expMs - Date.now() : null;
+  const warm = left != null ? left > 0 : !!pc.warm;
+
+  const hit = typeof pc.hit_ratio === "number" && pc.requests > 1
+    ? c.dim(` ${Math.round(pc.hit_ratio * 100)}% hit`)
+    : "";
+
+  if (!warm) {
+    const rebuild = pc.recache_tokens_if_cold > 0
+      ? c.dim(` ↺ ${fmtTokens(pc.recache_tokens_if_cold)}`)
+      : "";
+    return `${label} ${c.cyan("❄ cold")}${rebuild}${hit}`;
+  }
+
+  if (left == null) return `${label} ${c.green("● warm")}${hit}`;
+
+  // Bar shows time remaining; colour goes green → red as the TTL drains.
+  const drained = Math.min(100, Math.max(0, 100 - (left / ttlMs) * 100));
+  const col = levelColor(drained);
+  const filled = Math.max(1, Math.round(((100 - drained) / 100) * 4));
+  const gauge = col("▰".repeat(filled)) + c.dim("▱".repeat(4 - filled));
+  return `${label} ${gauge} ${col(bold(fmtClock(left)))}${hit}`;
+}
+
 // ---------- assemble ----------
 const head = [c.claude("◆ ") + bold(c.text(modelName)), fmtEffort(readEffort())]
   .filter(Boolean)
@@ -159,6 +203,7 @@ const head = [c.claude("◆ ") + bold(c.text(modelName)), fmtEffort(readEffort()
 const parts = [
   head,
   contextSegment(),
+  cacheSegment(),
   limitSegment("5h", rl.five_hour, true),
   limitSegment("7d", rl.seven_day, false),
 ].filter(Boolean);

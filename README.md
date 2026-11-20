@@ -3,7 +3,7 @@
 A colored status line for [Claude Code](https://claude.com/claude-code):
 
 ```
-◆ Opus 5.5 ●●●○○ high │ ctx ▰▰▱▱▱▱▱▱ 23% 230k/1M │ 5h ▰▰▰▱▱▱ 42% ↻ 2h13m │ 7d ▰▰▰▰▰▱ 81%
+◆ Opus 5.5 ●●●○○ high │ ctx ▰▰▱▱▱▱▱▱ 23% 230k/1M │ cache ▰▰▰▱ 4m05s 94% hit │ 5h ▰▰▰▱▱▱ 42% ↻ 2h13m │ 7d ▰▰▰▰▰▱ 81%
 ```
 
 | Segment | Shows |
@@ -11,6 +11,7 @@ A colored status line for [Claude Code](https://claude.com/claude-code):
 | `◆ Opus 5.5` | Current model |
 | `●●●○○ high` | Effort level (low → medium → high → xhigh → max) |
 | `ctx` | Context window used: bar, percent, tokens / window size |
+| `cache` | Prompt cache warmth: time left before it goes cold (bar drains, green → red), hit ratio. When cold: `❄ cold ↺ 128k` = tokens the next message must re-write |
 | `5h` | 5-hour usage limit, plus time until it resets (`↻`) |
 | `7d` | Weekly usage limit |
 
@@ -39,6 +40,10 @@ The installer copies `statusline-command.js` into `~/.claude/` (or `$CLAUDE_CONF
   installer handles this.
 - **Effort** comes from the status line payload when Claude Code provides it, otherwise from
   `effortLevel` / `modelSettings` in `settings.json`.
+- **Cache** needs Claude Code v2.1.251+ (it reads the `prompt_cache` field) and only covers the
+  main conversation, not subagents. The installer sets `refreshInterval: 5` so the countdown
+  ticks while you're idle; without it the line only redraws on new messages. Set your own
+  `refreshInterval` in `settings.json` and re-running the installer keeps it.
 - **Debugging:** set `CLAUDE_STATUSLINE_DEBUG=1` to write each raw payload to
   `~/.claude/statusline-last.json`.
 - **Test by hand:** `echo '{}' | node ~/.claude/statusline-command.js`
